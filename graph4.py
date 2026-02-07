@@ -99,9 +99,11 @@ class System:
     
     def solve(self, eps=1e-9) -> npt.NDArray[np.float64] | None:
         dim = self.Kg.shape[0]
-        if self.F.shape[0] < dim:
+        if self.F.shape[0] != dim:
             F_new = np.zeros(dim)
-            F_new[:self.F.shape[0]] = self.F
+            # Kopiere so viel wie möglich (das kleinere von beiden)
+            min_len = min(self.F.shape[0], dim)
+            F_new[:min_len] = self.F[:min_len]
             self.F = F_new
 
         assert self.Kg.shape[0] == self.Kg.shape[1], "Stiffness matrix K must be square."
@@ -276,42 +278,92 @@ class System:
 
 if __name__ == "__main__":
 
-    nodes=dict()
-    nodes={
-        0: (0.0, 0.0),
-        1: (1.0, 0.0),
-        2: (1.0, 1.0),
-        3: (0.0, 1.0)
-    }
+    # 1. Gitter erzeugen (breit und flach, wie ein Balken)
+    width = 50   # Knoten horizontal
+    height = 20   # Knoten vertikal
 
-    springs_loc = [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2), (1, 3)]
-
+    nodes = dict()
     springs = []
-    nodes_uebergabe = dict()
 
-    for n, (x, z) in nodes.items():
-        nodes_uebergabe[n] = Node(n, x, z)
+    # Knoten erstellen (ID-Schema: id = x * height + z)
+    for x in range(width):
+        for z in range(height):
+            node_id = x * height + z
+            nodes[node_id] = Node(node_id, float(x), float(z))
 
-    for i, j in springs_loc:
-        springs.append(Spring(nodes_uebergabe[i], nodes_uebergabe[j]))
+    # Federn erstellen (Horizontal, Vertikal, beide Diagonalen = Kreuz-Muster)
+    for x in range(width):
+        for z in range(height):
+            u = x * height + z
 
-    system=System(nodes_uebergabe, springs)
+            # Nach rechts
+            if x < width - 1:
+                v = (x + 1) * height + z
+                springs.append(Spring(nodes[u], nodes[v]))
 
-    Kg=system.assemble_global_stiffness()
+                # Diagonal nach rechts oben
+                if z < height - 1:
+                    v_diag = (x + 1) * height + (z + 1)
+                    springs.append(Spring(nodes[u], nodes[v_diag]))
 
-    u_fixed_idx = [0, 1] # fix node
+            # Nach oben
+            if z < height - 1:
+                v = x * height + (z + 1)
+                springs.append(Spring(nodes[u], nodes[v]))
 
-    #anstatt: F = np.array([0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0]) # apply force at node j in x-direction
-    #besser, weil flexibler:
-    F = np.zeros(2*len(nodes_uebergabe))
-    F[2] = 10.0  # apply force at node 1 in x-direction
+                # Diagonal nach links oben
+                if x > 0:
+                    v_diag_left = (x - 1) * height + (z + 1)
+                    springs.append(Spring(nodes[u], nodes[v_diag_left]))
 
-    system.set_boundary_conditions(F, u_fixed_idx)  #Randbedingungen setzen
-    u = system.solve()   
-    print(f"{u=}")
+    system = System(nodes, springs)
 
-    graph_structure = system.create_graph_structure(None)
+    # 2. Randbedingungen (MBB-Balken)
+    # Links unten (x=0, z=0): FESTLAGER (x und z fixiert)
+    bottom_left = 0 * height + 0  # = 0
+    
+    # Rechts unten (x=width-1, z=0): ROLLENLAGER (nur z fixiert)
+    bottom_right = (width - 1) * height + 0
+
+    u_fixed_idx = [
+        2 * bottom_left,       # x-Richtung fest (Festlager)
+        2 * bottom_left + 1,   # z-Richtung fest (Festlager)
+        2 * bottom_right + 1   # z-Richtung fest (Rollenlager, x ist frei!)
+    ]
+
+    # 3. Kraft F oben in der Mitte, nach unten
+    F = np.zeros(2 * len(nodes))
+    top_center = (width // 2) * height + (height - 1)  # Knoten oben mitte
+    F[2 * top_center + 1] = -10.0  # Kraft nach UNTEN
+
+    print(f"Gitter: {width}x{height} = {len(nodes)} Knoten, {len(springs)} Federn")
+    print(f"Festlager: Knoten {bottom_left} (links unten)")
+    print(f"Rollenlager: Knoten {bottom_right} (rechts unten)")
+    print(f"Kraft auf Knoten {top_center} (oben mitte)")
+
+    # 4. Berechnen
+    system.set_boundary_conditions(F, u_fixed_idx)
+    system.assemble_global_stiffness()
+    system.solve()
+
+    system.create_graph_structure(None)
     system.sort_nodes_by_relevance()
-    system.reduce_mass(1)
-    nx.draw(system.graph_structure, with_labels=True, node_color='lightblue', edge_color='gray')
+
+    print(f"\nStartmasse: {len(system.nodes)} Knoten")
+
+    # 5. Optimieren! Versuche ~40% der Knoten zu löschen
+    to_delete = int(len(nodes) * 0.4)
+    print(f"Versuche {to_delete} Knoten zu löschen...\n")
+    system.reduce_mass(to_delete)
+
+    print(f"\nEndmasse: {len(system.nodes)} Knoten")
+
+    # 6. Ergebnis zeichnen (mit echten Koordinaten)
+    pos = {node.id: (node.x, node.z) for node in system.nodes.values()}
+    
+    plt.figure(figsize=(14, 5))
+    nx.draw(system.graph_structure, pos=pos, with_labels=True, 
+            node_color='lightblue', edge_color='gray', node_size=200, font_size=7)
+    plt.title("MBB-Balken nach Topologieoptimierung")
+    plt.axis('equal')
     plt.show()
