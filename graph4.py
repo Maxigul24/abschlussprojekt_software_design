@@ -112,15 +112,19 @@ class System:
         K_calc = self.Kg.copy()
         F_calc = self.F.copy()
 
-        for d in self.u_fixed_idx:       #Randbedingungen einbauen
+        # Nur gültige Indizes für die aktuelle Matrixgröße verwenden
+        current_dim = K_calc.shape[0]
+        valid_fixed_idx = [idx for idx in self.u_fixed_idx if idx < current_dim]
+
+        for d in valid_fixed_idx:       #Randbedingungen einbauen
             K_calc[d, :] = 0.0
             K_calc[:, d] = 0.0
             K_calc[d, d] = 1.0
-            F_calc[d]=0.0
+            F_calc[d] = 0.0
 
         try:
             self.u = np.linalg.solve(K_calc, F_calc) # solve the linear system Ku = F
-            self.u[self.u_fixed_idx] = 0.0
+            self.u[valid_fixed_idx] = 0.0
 
             return self.u
         
@@ -130,7 +134,7 @@ class System:
 
             try:
                 self.u = np.linalg.solve(K_calc, F_calc) # solve the linear system Ku = F
-                self.u[self.u_fixed_idx] = 0.0
+                self.u[valid_fixed_idx] = 0.0
                 return self.u
             
             except np.linalg.LinAlgError:
@@ -203,6 +207,13 @@ class System:
                 fixed_nodes.add(i // 2)
             i += 2
 
+        # Initialisierung: Falls noch keine Sortierung existiert, erstelle sie
+        if self.ids_sorted is None:
+             self.assemble_global_stiffness()
+             self.solve()
+             self.create_graph_structure(None)
+             self.sort_nodes_by_relevance()
+
         #Kopie der Liste
         candidates = self.ids_sorted.copy() 
 
@@ -230,7 +241,7 @@ class System:
                 if node_to_delete in nodes_try:
                     nodes_try.pop(node_to_delete)
                 else:
-                    continue # Falls Knoten schon weg ist (sollte nicht passieren), weiter
+                    continue # Falls Knoten schon weg ist
 
                 # Graphen bauen für den Check
                 new_graph_w_reduced_nodes = self.create_graph_structure(nodes_try)
@@ -244,11 +255,11 @@ class System:
                 else:
                     for force_node in force_nodes:
                         for fixed_node in fixed_nodes:
-                            # Wichtig: Prüfen ob die Knoten noch im Graphen sind
+                            # Prüfen ob die Knoten noch im Graphen sind
                             if force_node in new_graph_w_reduced_nodes and fixed_node in new_graph_w_reduced_nodes:
                                 if nx.has_path(new_graph_w_reduced_nodes, force_node, fixed_node):
                                     does_path_exist = True
-                                    break # Ein Pfad reicht uns (meistens)
+                                    break 
                                 else:
                                     does_path_exist = False
                             else:
@@ -259,39 +270,29 @@ class System:
                             break
 
                 if does_path_exist:
-                    # ERFOLG: Wir übernehmen die Änderung
                     self.nodes = nodes_try # Den echten Zustand aktualisieren
                     self.graph_structure = new_graph_w_reduced_nodes
-                    j += 1 # Ein Ziel erreicht!
+                    j += 1
                     print(f"Knoten {node_to_delete} erfolgreich gelöscht. ({j}/{del_amount})")
-                    break # Wir gehen zurück in die äußere Schleife, um den nächsten Knoten zu löschen (und nicht sofort den nächsten Kandidaten nehmen)
+                    break 
                 else:
-                    # FEHLSCHLAG: Wir machen NICHTS am System
-                    # Wir erhöhen j NICHT, weil wir ja nichts gelöscht haben.
-                    # Wir gehen einfach in die nächste Runde und nehmen den nächsten Kandidaten aus 'candidates'.
+                    # Wir gehen einfach in die nächste Runde und nehmen den nächsten Kandidaten
                     print(f"Knoten {node_to_delete} konnte nicht gelöscht werden (Pfad unterbrochen).")
 
         reduced_mass = len(self.nodes)
         return reduced_mass
 
-        
-
-if __name__ == "__main__":
-
-    # 1. Gitter erzeugen (breit und flach, wie ein Balken)
-    width = 50   # Knoten horizontal
-    height = 20   # Knoten vertikal
-
+def create_mbb_beam(width: int, height: int) -> tuple[dict[int, Node], list[Spring]]:
     nodes = dict()
     springs = []
 
-    # Knoten erstellen (ID-Schema: id = x * height + z)
+    # Knoten erstellen
     for x in range(width):
         for z in range(height):
             node_id = x * height + z
             nodes[node_id] = Node(node_id, float(x), float(z))
 
-    # Federn erstellen (Horizontal, Vertikal, beide Diagonalen = Kreuz-Muster)
+    # Federn erstellen 
     for x in range(width):
         for z in range(height):
             u = x * height + z
@@ -315,10 +316,78 @@ if __name__ == "__main__":
                 if x > 0:
                     v_diag_left = (x - 1) * height + (z + 1)
                     springs.append(Spring(nodes[u], nodes[v_diag_left]))
+    
+    return nodes, springs
+
+def plot_structure(system: System, title: str = "Struktur", show_labels: bool = False, colormap: str = "viridis") -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(10, 5))
+    
+    # Koordinaten sammeln
+    x_vals = []
+    z_vals = []
+    for node in system.nodes.values():
+        x_vals.append(node.x)
+        z_vals.append(node.z)
+    
+    ax.scatter(x_vals, z_vals, c='black', s=10, zorder=5)
+
+    # Energie berechnen für Heatmap
+    valid_springs = []
+    energies = []
+    if system.u is not None:
+        for spring in system.springs:
+            if spring.node_i.id in system.nodes and spring.node_j.id in system.nodes:
+                val = spring.calc_weighting(system.u)
+                energies.append(val)
+                valid_springs.append(spring)
+
+    colors = []
+    weights = []
+    
+    if energies:
+        max_e = max(energies)
+        # Logarithmische Skalierung für bessere Sichtbarkeit von kleinen Unterschieden
+        log_energies = np.log1p(energies)
+        max_log = max(log_energies) if max(log_energies) > 0 else 1.0
+        
+        norm_energies = log_energies / max_log
+    else:
+        norm_energies = [0] * len(system.springs)
+    
+    # Schleife fürs Zeichnen
+    cmap = plt.get_cmap(colormap)
+    #Heatmap
+    for idx, spring in enumerate(valid_springs):
+        val_norm = norm_energies[idx]
+        color = cmap(val_norm)
+        # Dicke Linien für wichtige Elemente
+        weight = 1.0 + 2.0 * val_norm 
+        
+        ax.plot([spring.node_i.x, spring.node_j.x], 
+                [spring.node_i.z, spring.node_j.z], 
+                color=color, linewidth=weight, alpha=0.8)
+
+    if show_labels:
+        for node in system.nodes.values():
+            ax.text(node.x, node.z, str(node.id), fontsize=6, color='red')
+            
+    ax.set_title(title)
+    ax.set_aspect('equal')
+    ax.axis('off') 
+    
+    return fig
+
+if __name__ == "__main__":
+
+    # 1. Gitter erzeugen
+    width = 40   # Knoten horizontal
+    height = 10  # Knoten vertikal
+
+    nodes, springs = create_mbb_beam(width, height)    
 
     system = System(nodes, springs)
 
-    # 2. Randbedingungen (MBB-Balken)
+    # 2. Randbedingungen
     # Links unten (x=0, z=0): FESTLAGER (x und z fixiert)
     bottom_left = 0 * height + 0  # = 0
     
@@ -358,7 +427,7 @@ if __name__ == "__main__":
 
     print(f"\nEndmasse: {len(system.nodes)} Knoten")
 
-    # 6. Ergebnis zeichnen (mit echten Koordinaten)
+    # 6. Ergebnis zeichnen
     pos = {node.id: (node.x, node.z) for node in system.nodes.values()}
     
     plt.figure(figsize=(14, 5))
