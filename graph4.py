@@ -354,6 +354,55 @@ def create_mbb_beam(width: int, height: int) -> tuple[dict[int, Node], list[Spri
     
     return nodes, springs
 
+
+def create_from_image(image_array, threshold: int = 128):
+    #Erstellt Knoten & Federn aus einem Grayscale-Bild.
+    img_h, img_w = image_array.shape
+    nodes = dict()
+    springs = []
+
+    # Knoten nur dort erstellen, wo Pixel dunkel genug ist
+    for x in range(img_w):
+        for z in range(img_h):
+            if image_array[z, x] < threshold:
+                z_s = img_h - 1 - z          
+                node_id = x * img_h + z_s    
+                nodes[node_id] = Node(node_id, float(x), float(z_s))
+
+    # Federn zwischen benachbarten existierenden Knoten
+    for x in range(img_w):
+        for z_s in range(img_h):
+            u = x * img_h + z_s
+            if u not in nodes:
+                continue
+
+            # Nach rechts
+            if x < img_w - 1:
+                v = (x + 1) * img_h + z_s
+                if v in nodes:
+                    springs.append(Spring(nodes[u], nodes[v]))
+
+                # Diagonal nach rechts oben
+                if z_s < img_h - 1:
+                    v_diag = (x + 1) * img_h + (z_s + 1)
+                    if v_diag in nodes:
+                        springs.append(Spring(nodes[u], nodes[v_diag]))
+
+            # Nach oben
+            if z_s < img_h - 1:
+                v = x * img_h + (z_s + 1)
+                if v in nodes:
+                    springs.append(Spring(nodes[u], nodes[v]))
+
+                # Diagonal nach links oben
+                if x > 0:
+                    v_diag_left = (x - 1) * img_h + (z_s + 1)
+                    if v_diag_left in nodes:
+                        springs.append(Spring(nodes[u], nodes[v_diag_left]))
+
+    return nodes, springs, img_w, img_h
+
+
 def plot_structure(system: System, title: str = "Struktur", show_labels: bool = False, colormap: str = "viridis", deformation_scale: float = 0.0) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(10, 5))
 

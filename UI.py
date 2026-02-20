@@ -3,7 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 import io
-from graph4 import System, create_mbb_beam, plot_structure
+from PIL import Image
+from graph4 import System, create_mbb_beam, create_from_image, plot_structure
 
 st.set_page_config(page_title="Topology Optimizer", layout="wide")
 st.title("Topologieoptimierung")
@@ -25,6 +26,12 @@ with st.sidebar:
     if uploaded_file is not None:
         st.session_state.loaded_data = json.load(uploaded_file)
         st.success("Datei geladen! Drücke 'Simulation Starten'.")
+
+    st.header("📷 Bild als Struktur")
+    uploaded_img = st.file_uploader("Bild laden (.png, .jpg)", type=["png", "jpg", "jpeg"])
+    if uploaded_img is not None:
+        preview_img = Image.open(uploaded_img).convert("L")
+        st.image(preview_img, caption="Vorschau (Grayscale)", use_container_width=True)
 
     st.header("2. Randbedingungen")
     st.caption("Knoten-ID = Spalte × Höhe + Zeile  (ab 0)")
@@ -50,13 +57,12 @@ with st.sidebar:
 
     st.header("5. Visualisierung")
     show_labels      = st.checkbox("Knoten-IDs anzeigen",     value=False)
-    show_deformation = st.checkbox("Verformung anzeigen",     value=False)
     deformation_scale = 0.0
-    if show_deformation:
-        deformation_scale = st.slider("Verformungsskalierung", 1.0, 200.0, 50.0)
     show_intermediate = st.checkbox("Zwischenschritte anzeigen", value=True)
+    gif_every_n = st.slider("GIF: Jeden n-ten Schritt", 1, 20, 5,
+                            help="Jeder n-te Zwischenschritt wird als Frame gespeichert")
 
-    start_btn = st.button("Simulation Starten", type="primary")
+    start_btn = st.button("Optimierung Starten", type="primary")
 
 
 # ── Hilfsfunktionen ──────────────────────────────────────────────────────────
@@ -97,55 +103,68 @@ def figure_to_png_bytes(fig):
     return buf.getvalue()
 
 
-# ── Hauptlogik ───────────────────────────────────────────────────────────────
+# ── Struktur erstellen & Vorschau ──────────────────────────
+# Struktur erstellen: Bild > JSON > Gitter
+if uploaded_img is not None:
+    img = Image.open(uploaded_img).convert("L")
+    if max(img.size) > 30:
+        img.thumbnail((30, 30))
+    img_array = np.array(img)
+    nodes, springs, width, height = create_from_image(img_array, 128)
+    system = System(nodes, springs)
+    st.info(f"Struktur aus Bild: {len(nodes)} Knoten, {len(springs)} Federn ({img_array.shape[1]}×{img_array.shape[0]} px)")
 
+elif st.session_state.loaded_data is not None:
+    system = System.load_from_dict(st.session_state.loaded_data)
+    nodes  = system.nodes
+    st.info(f"Struktur aus Datei geladen: {len(nodes)} Knoten, {len(system.springs)} Federn")
+else:
+    nodes, springs = create_mbb_beam(width, height)
+    system = System(nodes, springs)
+
+# Randbedingungen setzen
+festlager_ids   = parse_node_ids(festlager_input)
+rollenlager_ids = parse_node_ids(rollenlager_input)
+
+u_fixed_idx = []
+for nid in festlager_ids:
+    u_fixed_idx.append(2 * nid)
+    u_fixed_idx.append(2 * nid + 1)
+for nid in rollenlager_ids:
+    u_fixed_idx.append(2 * nid + 1)
+
+max_id = max(nodes.keys())
+dim = 2 * (max_id + 1)
+F = parse_forces(kraefte_input, dim)
+
+system.set_boundary_conditions(F, u_fixed_idx)
+
+# Ausgangszustand berechnen und anzeigen
+st.subheader("Ausgangszustand")
+system.assemble_global_stiffness()
+system.solve()
+st.pyplot(plot_structure(system, "Vollständige Struktur", show_labels, "jet", deformation_scale))
+
+# ── Optimierung bei clicken ─────────────────────────────────────────────
 if start_btn:
-
-    # Struktur erstellen oder aus Datei laden
-    if st.session_state.loaded_data is not None:
-        system = System.load_from_dict(st.session_state.loaded_data)
-        nodes  = system.nodes
-        st.info(f"Struktur aus Datei geladen: {len(nodes)} Knoten, {len(system.springs)} Federn")
-    else:
-        nodes, springs = create_mbb_beam(width, height)
-        system = System(nodes, springs)
-
-        festlager_ids   = parse_node_ids(festlager_input)
-        rollenlager_ids = parse_node_ids(rollenlager_input)
-
-        u_fixed_idx = []
-        for nid in festlager_ids:
-            u_fixed_idx.append(2 * nid)
-            u_fixed_idx.append(2 * nid + 1)
-        for nid in rollenlager_ids:
-            u_fixed_idx.append(2 * nid + 1)
-
-        max_id = max(nodes.keys())
-        dim = 2 * (max_id + 1)
-        F = parse_forces(kraefte_input, dim)
-
-        system.set_boundary_conditions(F, u_fixed_idx)
-
-    # Ausgangszustand berechnen und anzeigen
-    st.subheader("Ausgangszustand")
-    system.assemble_global_stiffness()
-    system.solve()
-    st.pyplot(plot_structure(system, "Vollständige Struktur", show_labels, "jet", deformation_scale))
-
-    # Optimierung starten
     to_delete = int(len(nodes) * (remove_pct / 100))
     progress_bar = st.progress(0, text=f"Lösche {to_delete} Knoten...")
     intermediate_placeholder = st.empty()
+    gif_frames = []  # Frames für GIF sammeln
 
     def optimization_callback(j, total, sys):
         pct = int((j / total) * 100)
         progress_bar.progress(pct, text=f"Optimierung: {j}/{total} Knoten gelöscht...")
-        if show_intermediate:
+        needs_plot = show_intermediate or (j % gif_every_n == 0)
+        if needs_plot:
             sys.assemble_global_stiffness()
             sys.solve()
             fig = plot_structure(sys, f"Zwischenschritt: {j}/{total} gelöscht",
                                 show_labels, "jet", deformation_scale)
-            intermediate_placeholder.pyplot(fig)
+            if show_intermediate:
+                intermediate_placeholder.pyplot(fig)
+            if j % gif_every_n == 0:
+                gif_frames.append(figure_to_png_bytes(fig))
             plt.close(fig)
 
     try:
@@ -173,6 +192,30 @@ if start_btn:
             file_name="optimierte_topologie.png",
             mime="image/png"
         )
+
+        # GIF erstellen
+        if gif_frames:
+            # Letzten Frame hinzufügen
+            gif_frames.append(figure_to_png_bytes(result_fig))
+
+            pil_frames = [Image.open(io.BytesIO(f)).convert("RGBA") for f in gif_frames]
+            gif_buf = io.BytesIO()
+            # Erster und letzter Frame 1s, Rest 300ms
+            durations = [1000] + [300] * (len(pil_frames) - 2) + [1000]
+            pil_frames[0].save(
+                gif_buf, format="GIF", save_all=True,
+                append_images=pil_frames[1:],
+                duration=durations, loop=0
+            )
+            gif_buf.seek(0)
+
+            st.download_button(
+                label="🎞️ Animation als GIF herunterladen",
+                data=gif_buf.getvalue(),
+                file_name="topologie_animation.gif",
+                mime="image/gif"
+            )
+
 
         save_data = system.save_to_dict()
         st.download_button(
