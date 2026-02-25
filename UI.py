@@ -172,45 +172,44 @@ else:
     system = System(nodes, springs)
 
 # Randbedingungen setzen
-festlager_ids   = parse_node_ids(festlager_input)
-rollenlager_ids = parse_node_ids(rollenlager_input)
+if st.session_state.loaded_data is None: # Nur bei neu erstellter Struktur oder gezeichneter Struktur, nicht bei geladenen Daten, da diese schon die Randbedingungen enthalten
+    festlager_ids   = parse_node_ids(festlager_input)
+    rollenlager_ids = parse_node_ids(rollenlager_input)
 
-max_id = max(nodes.keys())
-dim = 2 * (max_id + 1)
-F = np.zeros(dim)
-u_fixed_idx = []
+    max_id = max(nodes.keys())
+    dim = 2 * (max_id + 1)
+    F = np.zeros(dim)
+    u_fixed_idx = []
 
-for nid in festlager_ids:
-    u_fixed_idx.append(2 * nid)     # x-fixed
-    u_fixed_idx.append(2 * nid + 1) # z-fixed
-for nid in rollenlager_ids:
-    u_fixed_idx.append(2 * nid + 1) # z-fixed
+    for nid in festlager_ids:
+        u_fixed_idx.append(2 * nid)     # x-fixed
+        u_fixed_idx.append(2 * nid + 1) # z-fixed
+    for nid in rollenlager_ids:
+        u_fixed_idx.append(2 * nid + 1) # z-fixed
 
-if is_symmetric:
-    # Symmetriekante in x-Richtung fixieren
-    for row in range(height):
-        sym_node_id = (width - 1) * height + row
-        u_fixed_idx.append(2 * sym_node_id) 
+    if is_symmetric:
+        # Symmetriekante in x-Richtung fixieren
+        for row in range(height):
+            sym_node_id = (width - 1) * height + row
+            u_fixed_idx.append(2 * sym_node_id) 
 
-    # Kraft oben rechts
-    force_node_id = (width - 1) * height + (height - 1)
-    try:
-        # Liest z.B. "0, -10" ein
-        parts = kraefte_input.split(',')
-        if len(parts) == 2:
-            fx = float(parts[0].strip())
-            fz = float(parts[1].strip())
-            F[2 * force_node_id] += fx
-            F[2 * force_node_id + 1] += fz
-    except ValueError:
-        st.error("Fehlerhafte Krafteingabe! Bitte im Format 'Fx, Fz' eingeben, z.B. '0, -10'")
+        # Kraft oben rechts
+        force_node_id = (width - 1) * height + (height - 1)
+        try:
+            # Liest z.B. "0, -10" ein
+            parts = kraefte_input.split(',')
+            if len(parts) == 2:
+                fx = float(parts[0].strip())
+                fz = float(parts[1].strip())
+                F[2 * force_node_id] += fx
+                F[2 * force_node_id + 1] += fz
+        except ValueError:
+            st.error("Fehlerhafte Krafteingabe! Bitte im Format 'Fx, Fz' eingeben, z.B. '0, -10'")
 
-else:
-    F = parse_forces(kraefte_input, dim)
+    else:
+        F = parse_forces(kraefte_input, dim)
 
     system.set_boundary_conditions(F, u_fixed_idx)
-else:
-    is_mbb = st.session_state.loaded_is_mbb  # MBB-Flag wiederherstellen
 
 
 # Ausgangszustand berechnen und anzeigen
@@ -237,7 +236,7 @@ if start_btn:
         pct = int((j / total) * 100)
         progress_bar.progress(pct, text=f"Optimierung: {j}/{total} Knoten gelöscht...")
         st.session_state.latest_system_state = sys.save_to_dict()
-        st.session_state.loaded_is_mbb = is_mbb  # MBB-Flag mitspeichern
+        st.session_state.loaded_is_mbb = is_symmetric
         if stop_placeholder.button("⏹ Stopp & Speichern", key=f"stop_btn_{j}"):
              st.warning("Optimierung wird unterbrochen...")
              return True # Signal zum Abbrechen an reduce_mass

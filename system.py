@@ -108,9 +108,8 @@ class System:
             F_new[:min_len] = self.F[:min_len]
             self.F = F_new
 
-        assert self.Kg.shape[0] == self.Kg.shape[1], #steifigkeitsmatrix muss quadratisch sein
-        assert self.Kg.shape[0] == self.F.shape[0], #Kraftvektor muss die gleiche Größe wie die Steifigkeitsmatrix haben
-
+        assert self.Kg.shape[0] == self.Kg.shape[1] #steifigkeitsmatrix muss quadratisch sein
+        
         K_calc = self.Kg.copy()
         F_calc = self.F.copy()
 
