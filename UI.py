@@ -12,6 +12,8 @@ st.title("Topologieoptimierung")
 
 if "loaded_data" not in st.session_state:
     st.session_state.loaded_data = None
+if "loaded_is_mbb" not in st.session_state:  # MBB-Flag für Resume
+    st.session_state.loaded_is_mbb = False
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
@@ -206,7 +208,9 @@ if is_symmetric:
 else:
     F = parse_forces(kraefte_input, dim)
 
-system.set_boundary_conditions(F, u_fixed_idx)
+    system.set_boundary_conditions(F, u_fixed_idx)
+else:
+    is_mbb = st.session_state.loaded_is_mbb  # MBB-Flag wiederherstellen
 
 
 # Ausgangszustand berechnen und anzeigen
@@ -233,6 +237,7 @@ if start_btn:
         pct = int((j / total) * 100)
         progress_bar.progress(pct, text=f"Optimierung: {j}/{total} Knoten gelöscht...")
         st.session_state.latest_system_state = sys.save_to_dict()
+        st.session_state.loaded_is_mbb = is_mbb  # MBB-Flag mitspeichern
         if stop_placeholder.button("⏹ Stopp & Speichern", key=f"stop_btn_{j}"):
              st.warning("Optimierung wird unterbrochen...")
              return True # Signal zum Abbrechen an reduce_mass
@@ -314,6 +319,8 @@ if start_btn:
         
         # Zustand zurücksetzen nach erfolgreichem Lauf
         st.session_state.latest_system_state = None
+        st.session_state.loaded_data = None  # Damit neue Struktur erstellt werden kann
+        st.session_state.loaded_is_mbb = False
 
     except Exception as e:
         st.error(f"Fehler während der Optimierung: {e}")
@@ -324,8 +331,9 @@ if "latest_system_state" in st.session_state and st.session_state.latest_system_
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("▶️ Weiterführen (Resume)"):
+        if st.button("▶️ Weiterführen"):
             st.session_state.loaded_data = st.session_state.latest_system_state
+            st.session_state.loaded_is_mbb = st.session_state.get("loaded_is_mbb", False)  # MBB-Flag übernehmen
             st.session_state.latest_system_state = None
             st.rerun()
             
