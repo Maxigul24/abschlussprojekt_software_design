@@ -12,6 +12,8 @@ st.title("Topologieoptimierung")
 
 if "loaded_data" not in st.session_state:
     st.session_state.loaded_data = None
+if "loaded_is_mbb" not in st.session_state:  # MBB-Flag für Resume
+    st.session_state.loaded_is_mbb = False
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
@@ -148,36 +150,40 @@ else:
     system = System(nodes, springs)
     is_mbb = True
 
-# Randbedingungen setzen
-festlager_ids   = parse_node_ids(festlager_input)
-rollenlager_ids = parse_node_ids(rollenlager_input)
+# Randbedingungen setzen nur wenn nicht aus JSON geladen,
+# da die geladene Datei bereits korrekte F und u_fixed_idx enthält
+if st.session_state.loaded_data is None:
+    festlager_ids   = parse_node_ids(festlager_input)
+    rollenlager_ids = parse_node_ids(rollenlager_input)
 
-u_fixed_idx = []
-for nid in festlager_ids:
-    u_fixed_idx.append(2 * nid)     # x-fixed
-    u_fixed_idx.append(2 * nid + 1) # z-fixed
-for nid in rollenlager_ids:
-    u_fixed_idx.append(2 * nid + 1) # z-fixed
+    u_fixed_idx = []
+    for nid in festlager_ids:
+        u_fixed_idx.append(2 * nid)     # x-fixed
+        u_fixed_idx.append(2 * nid + 1) # z-fixed
+    for nid in rollenlager_ids:
+        u_fixed_idx.append(2 * nid + 1) # z-fixed
 
-#Alle Knoten in der letzten Spalte (width - 1) dürfen nicht nach links/rechts (nur MBB)
-if is_mbb:
-    for row in range(height):
-        sym_node_id = (width - 1) * height + row
-        if sym_node_id in nodes:
-            u_fixed_idx.append(2 * sym_node_id) # NUR x-Richtung fixieren
+    #Alle Knoten in der letzten Spalte (width - 1) dürfen nicht nach links/rechts (nur MBB)
+    if is_mbb:
+        for row in range(height):
+            sym_node_id = (width - 1) * height + row
+            if sym_node_id in nodes:
+                u_fixed_idx.append(2 * sym_node_id) # NUR x-Richtung fixieren
 
-max_id = max(nodes.keys())
-dim = 2 * (max_id + 1)
-F = parse_forces(kraefte_input, dim)
+    max_id = max(nodes.keys())
+    dim = 2 * (max_id + 1)
+    F = parse_forces(kraefte_input, dim)
 
-force_node_id = (width - 1) * height + (height - 1) #Kraftangriffspunkt jetzt oben rechts
-if force_node_id not in nodes:
-    # Fallback: höchster existierender Knoten
-    force_node_id = max_id
-F = np.zeros(dim)
-F[2 * force_node_id + 1] = -10 # Kraft nach unten am Symmetriepunkt
+    force_node_id = (width - 1) * height + (height - 1) #Kraftangriffspunkt jetzt oben rechts
+    if force_node_id not in nodes:
+        # Fallback: höchster existierender Knoten
+        force_node_id = max_id
+    F = np.zeros(dim)
+    F[2 * force_node_id + 1] = -10 # Kraft nach unten am Symmetriepunkt
 
-system.set_boundary_conditions(F, u_fixed_idx)
+    system.set_boundary_conditions(F, u_fixed_idx)
+else:
+    is_mbb = st.session_state.loaded_is_mbb  # MBB-Flag wiederherstellen
 
 # Ausgangszustand berechnen und anzeigen
 st.subheader("Ausgangszustand")
@@ -203,6 +209,7 @@ if start_btn:
         pct = int((j / total) * 100)
         progress_bar.progress(pct, text=f"Optimierung: {j}/{total} Knoten gelöscht...")
         st.session_state.latest_system_state = sys.save_to_dict()
+        st.session_state.loaded_is_mbb = is_mbb  # MBB-Flag mitspeichern
         if stop_placeholder.button("⏹ Stopp & Speichern", key=f"stop_btn_{j}"):
              st.warning("Optimierung wird unterbrochen...")
              return True # Signal zum Abbrechen an reduce_mass
@@ -284,6 +291,8 @@ if start_btn:
         
         # Zustand zurücksetzen nach erfolgreichem Lauf
         st.session_state.latest_system_state = None
+        st.session_state.loaded_data = None  # Damit neue Struktur erstellt werden kann
+        st.session_state.loaded_is_mbb = False
 
     except Exception as e:
         st.error(f"Fehler während der Optimierung: {e}")
@@ -294,8 +303,9 @@ if "latest_system_state" in st.session_state and st.session_state.latest_system_
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("▶️ Weiterführen (Resume)"):
+        if st.button("▶️ Weiterführen"):
             st.session_state.loaded_data = st.session_state.latest_system_state
+            st.session_state.loaded_is_mbb = st.session_state.get("loaded_is_mbb", False)  # MBB-Flag übernehmen
             st.session_state.latest_system_state = None
             st.rerun()
             

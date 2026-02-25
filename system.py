@@ -103,13 +103,13 @@ class System:
         dim = self.Kg.shape[0]
         if self.F.shape[0] != dim:
             F_new = np.zeros(dim)
-            # Kopiere so viel wie möglich (das kleinere von beiden)
+            # Kopiere so viel wie möglich 
             min_len = min(self.F.shape[0], dim)
             F_new[:min_len] = self.F[:min_len]
             self.F = F_new
 
-        assert self.Kg.shape[0] == self.Kg.shape[1], "Stiffness matrix K must be square."
-        assert self.Kg.shape[0] == self.F.shape[0], "Force vector F must have the same size as K."
+        assert self.Kg.shape[0] == self.Kg.shape[1], #steifigkeitsmatrix muss quadratisch sein
+        assert self.Kg.shape[0] == self.F.shape[0], #Kraftvektor muss die gleiche Größe wie die Steifigkeitsmatrix haben
 
         K_calc = self.Kg.copy()
         F_calc = self.F.copy()
@@ -125,13 +125,12 @@ class System:
             F_calc[d] = 0.0
 
         try:
-            self.u = np.linalg.solve(K_calc, F_calc) # solve the linear system Ku = F
+            self.u = np.linalg.solve(K_calc, F_calc)
             self.u[valid_fixed_idx] = 0.0
 
             return self.u
         
         except np.linalg.LinAlgError:
-            # If the stiffness matrix is singular we can try a small regularization to stilll get a solution
             K_calc += np.eye(K_calc.shape[0]) * eps
 
             try:
@@ -182,10 +181,6 @@ class System:
 
         dict_to_sort = dict()
 
-        #sensitivitätsfilter (Nachbarschafts-Gewichtung):
-        #So wollen wir verhindern, dass einzelne Stränge im Tragwerk entstehen, indem man versucht das Material beieinander zu behalten, denn ansonsten können die einzelnen stränge zwar Energie aufnehemen, sind aber
-        #realisitisch gesehen komplett unbrauchbar da sie bei kleinsten äußeren Einflüssen wegknicken würden
-
         for node in self.nodes.values():
             #wie vorher
             is_fixed = (2 * node.id) in self.u_fixed_idx or (2 * node.id + 1) in self.u_fixed_idx
@@ -206,7 +201,7 @@ class System:
 
                 dict_to_sort[node.id] = total
 
-        #wiederum sortieren, damit die Knoten mit der geringsten Energie (also die "unwichtigsten") zuerst gelöscht werden
+        #wiederum sortieren, damit die Knoten mit der geringsten Energie zuerst gelöscht werden
         sorted_dict = dict(sorted(dict_to_sort.items(), key=lambda item: item[1]))
         self.ids_sorted = list(sorted_dict.keys())
         return self.ids_sorted
@@ -570,14 +565,14 @@ def plot_full_mbb(system, title="Optimierte Gesamtstruktur", colormap="jet", def
     return fig
 if __name__ == "__main__":
 
-    # 1. Gitter erzeugen
+    # Gitter erzeugen
     width = 40   # Knoten horizontal
     height = 10  # Knoten vertikal
     nodes, springs = create_mbb_beam(width, height)    
 
     system = System(nodes, springs)
 
-    # 2. Randbedingungen
+    # Randbedingungen
     # Links unten (x=0, z=0): FESTLAGER (x und z fixiert)
     bottom_left = 0 * height + 0  # = 0
     
@@ -590,7 +585,7 @@ if __name__ == "__main__":
         2 * bottom_right + 1   # z-Richtung fest (Rollenlager, x ist frei)
     ]
 
-    # 3. Kraft F oben in der Mitte, nach unten
+    # Kraft F oben in der Mitte, nach unten
     F = np.zeros(2 * len(nodes))
     top_center = (width // 2) * height + (height - 1)
     F[2 * top_center + 1] = -0.1  # Kraft nach UNTEN
@@ -600,7 +595,7 @@ if __name__ == "__main__":
     print(f"Rollenlager: Knoten {bottom_right} (rechts unten)")
     print(f"Kraft auf Knoten {top_center} (oben mitte)")
 
-    # 4. Berechnen
+    # Berechnen
     system.set_boundary_conditions(F, u_fixed_idx)
     system.assemble_global_stiffness()
     system.solve()
@@ -610,14 +605,14 @@ if __name__ == "__main__":
 
     print(f"\nStartmasse: {len(system.nodes)} Knoten")
 
-    # 5. Optimieren! Versuche ~40% der Knoten zu löschen
+    # Optimieren! Versuche ~40% der Knoten zu löschen
     to_delete = int(len(nodes) * 0.4)
     print(f"Versuche {to_delete} Knoten zu löschen...\n")
     system.reduce_mass(to_delete)
 
     print(f"\nEndmasse: {len(system.nodes)} Knoten")
 
-    # 6. Ergebnis zeichnen
+    # Ergebnis zeichnen
     pos = {node.id: (node.x, node.z) for node in system.nodes.values()}
     
     plt.figure(figsize=(14, 5))
